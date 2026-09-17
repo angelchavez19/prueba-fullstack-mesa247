@@ -45,3 +45,25 @@ def get_branch(
             detail=f"Branch with id {branch_id} not found",
         )
     return branch
+
+
+@router.patch("/{branch_id}", response_model=BranchRead)
+def update_branch(
+    branch_id: int,
+    branch_update: BranchUpdate,
+    session: Session = Depends(get_session),
+) -> Branch:
+    """Update details of a specific branch."""
+    branch = session.get(Branch, branch_id)
+    if not branch:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Branch with id {branch_id} not found",
+        )
+    update_dict = branch_update.model_dump(exclude_unset=True)
+    for field, value in update_dict.items():
+        setattr(branch, field, value)
+    session.add(branch)
+    session.commit()
+    session.refresh(branch)
+    return branch

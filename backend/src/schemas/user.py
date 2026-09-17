@@ -1,13 +1,13 @@
 from datetime import datetime
 from typing import Optional
-from pydantic import BaseModel, EmailStr, ConfigDict
+from pydantic import BaseModel, EmailStr, Field, ConfigDict
 from src.models.user import UserRole
 
 
 class UserCreate(BaseModel):
-    name: str
+    name: str = Field(min_length=2, max_length=150)
     email: EmailStr
-    password: str
+    password: str = Field(min_length=8, max_length=128, description="Password must be at least 8 characters")
     branch_id: int
     role: UserRole = UserRole.HOST
 

@@ -8,16 +8,16 @@ if TYPE_CHECKING:
 
 
 class BranchBase(SQLModel):
-    name: str = Field(index=True, max_length=150)
+    name: str = Field(index=True, min_length=2, max_length=150)
 
     # Segmented address fields
-    street: str = Field(max_length=200, description="Street, avenue or main roadway")
-    exterior_number: str = Field(max_length=50, description="Exterior number or building identifier")
+    street: str = Field(min_length=2, max_length=200, description="Street, avenue or main roadway")
+    exterior_number: str = Field(min_length=1, max_length=50, description="Exterior number or building identifier")
     interior_number: Optional[str] = Field(default=None, max_length=50, description="Interior, suite, or apartment number")
-    neighborhood: str = Field(max_length=120, description="Neighborhood, district, or colonia")
-    city: str = Field(max_length=100, description="City")
-    state: str = Field(max_length=100, description="State, province, or department")
-    country: str = Field(max_length=100, description="Country in LATAM (e.g. Peru, Mexico, Colombia, Chile, Argentina)")
+    neighborhood: str = Field(min_length=2, max_length=120, description="Neighborhood, district, or colonia")
+    city: str = Field(min_length=2, max_length=100, description="City")
+    state: str = Field(min_length=2, max_length=100, description="State, province, or department")
+    country: str = Field(min_length=2, max_length=100, description="Country in LATAM (e.g. Peru, Mexico, Colombia, Chile, Argentina)")
     postal_code: Optional[str] = Field(default=None, max_length=20, description="Postal/ZIP code")
 
 
