@@ -10,16 +10,29 @@ if TYPE_CHECKING:
 
 class QueueStatus(str, Enum):
     RESERVED = "reserved"
+    CALLED = "called"
     SEATED = "seated"
     CANCELLED = "cancelled"
     NO_SHOW = "no-show"
 
 
 # Allowed state transitions:
-# From 'reserved' -> 'seated', 'cancelled', 'no-show'
+# From 'reserved' -> 'called', 'seated', 'cancelled', 'no-show'
+# From 'called' -> 'seated', 'cancelled', 'no-show', 'reserved'
 # Once in seated, cancelled, or no-show, the state is terminal.
 VALID_TRANSITIONS: dict[QueueStatus, set[QueueStatus]] = {
-    QueueStatus.RESERVED: {QueueStatus.SEATED, QueueStatus.CANCELLED, QueueStatus.NO_SHOW},
+    QueueStatus.RESERVED: {
+        QueueStatus.CALLED,
+        QueueStatus.SEATED,
+        QueueStatus.CANCELLED,
+        QueueStatus.NO_SHOW,
+    },
+    QueueStatus.CALLED: {
+        QueueStatus.SEATED,
+        QueueStatus.CANCELLED,
+        QueueStatus.NO_SHOW,
+        QueueStatus.RESERVED,
+    },
     QueueStatus.SEATED: set(),
     QueueStatus.CANCELLED: set(),
     QueueStatus.NO_SHOW: set(),
@@ -46,6 +59,8 @@ class QueueEntry(QueueEntryBase, table=True):
     status: QueueStatus = Field(default=QueueStatus.RESERVED, index=True)
 
     # State transition timestamps
+    called_at: Optional[datetime] = Field(default=None)
+    was_called: bool = Field(default=False, description="Flag indicating if the diner was called")
     seated_at: Optional[datetime] = Field(default=None)
     cancelled_at: Optional[datetime] = Field(default=None)
     no_show_at: Optional[datetime] = Field(default=None)
