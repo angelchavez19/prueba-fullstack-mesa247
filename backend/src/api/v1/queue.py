@@ -1,4 +1,5 @@
 import asyncio
+import json
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
@@ -19,7 +20,7 @@ from src.schemas.queue import (
 from src.services.queue_service import QueueService
 from src.services.metrics_service import MetricsService
 from src.services.sse_broadcaster import broadcaster
-from src.api.deps import get_current_user
+from src.api.deps import get_current_user, get_optional_current_user
 
 router = APIRouter(prefix="/branches/{branch_id}/queue", tags=["Queue Management (Comensales)"])
 
@@ -29,7 +30,7 @@ def add_diner_to_queue(
     branch_id: int,
     entry_in: QueueEntryCreate,
     session: Session = Depends(get_session),
-    current_user: User = Depends(get_current_user),
+    current_user: Optional[User] = Depends(get_optional_current_user),
 ) -> QueueEntry:
     """
     Register a diner into the branch queue.
@@ -42,11 +43,36 @@ def add_diner_to_queue(
             detail=f"Branch with id {branch_id} not found",
         )
 
+    user_id = current_user.id if current_user else None
     return QueueService.add_diner_to_queue(
         session=session,
         branch_id=branch_id,
         data=entry_in,
-        user_id=current_user.id,
+        user_id=user_id,
+    )
+
+
+@router.post("/check-in", response_model=QueueEntryRead, status_code=status.HTTP_201_CREATED)
+def diner_self_check_in(
+    branch_id: int,
+    entry_in: QueueEntryCreate,
+    session: Session = Depends(get_session),
+) -> QueueEntry:
+    """
+    Public check-in endpoint for unauthenticated diners scanning branch QR code.
+    """
+    branch = session.get(Branch, branch_id)
+    if not branch:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Branch with id {branch_id} not found",
+        )
+
+    return QueueService.add_diner_to_queue(
+        session=session,
+        branch_id=branch_id,
+        data=entry_in,
+        user_id=None,
     )
 
 
@@ -100,6 +126,65 @@ def get_branch_queue_metrics(
     return MetricsService.get_branch_metrics(session, branch_id, timeframe=timeframe)
 
 
+def _get_branch_active_queue_json(branch_id: int) -> str:
+    with Session(engine) as local_session:
+        stmt = (
+            select(QueueEntry)
+            .where(
+                QueueEntry.branch_id == branch_id,
+                QueueEntry.status.in_([QueueStatus.RESERVED, QueueStatus.CALLED]),
+            )
+            .order_by(QueueEntry.check_in_time.asc())
+        )
+        entries = local_session.exec(stmt).all()
+        return json.dumps([QueueEntryRead.model_validate(e).model_dump(mode="json") for e in entries])
+
+
+@router.get("/stream")
+async def stream_branch_queue(
+    branch_id: int,
+    request: Request,
+    session: Session = Depends(get_session),
+):
+    """
+    Real-time SSE stream for staff to monitor active branch queue entries.
+    Emits events when a diner is added, called, seated, cancelled, or marked no-show.
+    """
+    branch = session.get(Branch, branch_id)
+    if not branch:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Branch with id {branch_id} not found")
+
+    initial_json = _get_branch_active_queue_json(branch_id)
+    queue = broadcaster.subscribe(branch_id)
+
+    async def event_generator():
+        try:
+            # 1. Send immediate initial active queue
+            yield f"event: queue_sync\ndata: {initial_json}\n\n"
+
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    await asyncio.wait_for(queue.get(), timeout=15.0)
+                    data_json = await asyncio.to_thread(_get_branch_active_queue_json, branch_id)
+                    yield f"event: queue_sync\ndata: {data_json}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": keep-alive\n\n"
+        finally:
+            broadcaster.unsubscribe(branch_id, queue)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @router.get("/{entry_id}", response_model=QueueEntryDetailRead)
 def get_queue_entry_detail(
     branch_id: int,
@@ -142,6 +227,30 @@ def update_queue_entry_status(
         queue_entry=entry,
         target_status=status_update.status,
         user_id=current_user.id,
+    )
+
+
+@router.post("/{entry_id}/cancel", response_model=QueueEntryRead)
+def diner_cancel_reservation(
+    branch_id: int,
+    entry_id: int,
+    session: Session = Depends(get_session),
+) -> QueueEntry:
+    """
+    Public endpoint for a diner to cancel their queue reservation.
+    """
+    entry = session.get(QueueEntry, entry_id)
+    if not entry or entry.branch_id != branch_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Queue entry with id {entry_id} not found for branch {branch_id}",
+        )
+
+    return QueueService.transition_status(
+        session=session,
+        queue_entry=entry,
+        target_status=QueueStatus.CANCELLED,
+        user_id=None,
     )
 
 
@@ -234,3 +343,4 @@ async def stream_diner_queue_live(
             "X-Accel-Buffering": "no",
         },
     )
+

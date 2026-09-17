@@ -185,6 +185,15 @@ class QueueService:
             people_ahead = 0
             message = f"Estado actual: {entry.status.value}"
 
+        avg_stmt = select(func.avg(QueueEntry.wait_time_seconds)).where(
+            QueueEntry.branch_id == branch_id,
+            QueueEntry.status == QueueStatus.SEATED,
+            QueueEntry.wait_time_seconds.is_not(None),  # type: ignore
+        )
+        avg_raw = session.exec(avg_stmt).one()
+        avg_wait_minutes = round(float(avg_raw) / 60.0, 1) if avg_raw is not None else 15.0
+        estimated_wait_minutes = max(5, int((people_ahead + 1) * 8)) if entry.status == QueueStatus.RESERVED else 0
+
         return QueuePositionInfo(
             entry_id=entry.id,  # type: ignore
             branch_id=entry.branch_id,
@@ -194,5 +203,7 @@ class QueueService:
             order_number=order_number,
             people_ahead=people_ahead,
             called_at=entry.called_at,
+            average_wait_minutes=avg_wait_minutes,
+            estimated_wait_minutes=estimated_wait_minutes,
             message=message,
         )

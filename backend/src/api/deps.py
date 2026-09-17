@@ -8,6 +8,7 @@ from src.models.user import User
 from src.security import decode_access_token
 
 security = HTTPBearer()
+optional_security = HTTPBearer(auto_error=False)
 
 
 def get_current_user(
@@ -42,3 +43,24 @@ def get_current_user(
             detail="Inactive user account",
         )
     return user
+
+
+def get_optional_current_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(optional_security),
+    session: Session = Depends(get_session),
+) -> User | None:
+    """Dependency that returns active authenticated user if token is present and valid, or None."""
+    if credentials is None:
+        return None
+    try:
+        payload = decode_access_token(credentials.credentials)
+        user_id_str: str = payload.get("sub")  # type: ignore
+        if user_id_str is None:
+            return None
+        user = session.get(User, int(user_id_str))
+        if user and user.is_active:
+            return user
+    except Exception:
+        return None
+    return None
+
