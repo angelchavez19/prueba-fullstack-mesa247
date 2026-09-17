@@ -1,7 +1,9 @@
+import asyncio
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import StreamingResponse
 from sqlmodel import Session, select
-from src.database import get_session
+from src.database import get_session, engine
 from src.models.branch import Branch
 from src.models.queue import QueueEntry, QueueStatus
 from src.models.user import User
@@ -12,9 +14,11 @@ from src.schemas.queue import (
     QueueStatusUpdate,
     QueueMetrics,
     MetricTimeframe,
+    QueuePositionInfo,
 )
 from src.services.queue_service import QueueService
 from src.services.metrics_service import MetricsService
+from src.services.sse_broadcaster import broadcaster
 from src.api.deps import get_current_user
 
 router = APIRouter(prefix="/branches/{branch_id}/queue", tags=["Queue Management (Comensales)"])
@@ -138,4 +142,95 @@ def update_queue_entry_status(
         queue_entry=entry,
         target_status=status_update.status,
         user_id=current_user.id,
+    )
+
+
+@router.get("/{entry_id}/position", response_model=QueuePositionInfo)
+def get_diner_position(
+    branch_id: int,
+    entry_id: int,
+    session: Session = Depends(get_session),
+) -> QueuePositionInfo:
+    """
+    Public endpoint for diners to check their current order number, status,
+    and number of parties ahead in the queue.
+    """
+    return QueueService.get_diner_queue_position(session, branch_id, entry_id)
+
+
+@router.get("/{entry_id}/live")
+async def stream_diner_queue_live(
+    branch_id: int,
+    entry_id: int,
+    request: Request,
+    max_events: Optional[int] = Query(
+        default=None,
+        description="Optional maximum events to receive before closing stream (useful for testing)",
+    ),
+    session: Session = Depends(get_session),
+):
+    """
+    Real-time Server-Sent Events (SSE) stream for a diner to track their order number.
+    Pushes updates instantly when queue state changes without overloading the server.
+    Includes keep-alive comments to prevent connection drops.
+    """
+    # Verify diner exists and belongs to branch
+    initial_info = QueueService.get_diner_queue_position(session, branch_id, entry_id)
+    queue = broadcaster.subscribe(branch_id)
+
+    async def event_generator():
+        sent_events = 0
+        try:
+            # 1. Send immediate initial state
+            yield f"event: queue_update\ndata: {initial_info.model_dump_json()}\n\n"
+            sent_events += 1
+            if max_events is not None and sent_events >= max_events:
+                return
+
+            # If already resolved, finish stream
+            if initial_info.status in (QueueStatus.SEATED, QueueStatus.CANCELLED, QueueStatus.NO_SHOW):
+                return
+
+            last_json = initial_info.model_dump_json()
+
+            while True:
+                if await request.is_disconnected():
+                    break
+
+                try:
+                    # Await real-time notification from broadcaster or 15s keep-alive timeout
+                    await asyncio.wait_for(queue.get(), timeout=15.0)
+
+                    with Session(engine) as local_session:
+                        current_info = QueueService.get_diner_queue_position(
+                            local_session, branch_id, entry_id
+                        )
+                        current_json = current_info.model_dump_json()
+
+                        if current_json != last_json:
+                            last_json = current_json
+                            yield f"event: queue_update\ndata: {current_json}\n\n"
+
+                        if current_info.status in (
+                            QueueStatus.SEATED,
+                            QueueStatus.CANCELLED,
+                            QueueStatus.NO_SHOW,
+                        ):
+                            yield f"event: queue_closed\ndata: {current_json}\n\n"
+                            break
+                except asyncio.TimeoutError:
+                    # Heartbeat comment to keep SSE connection alive without DB queries
+                    yield ": keep-alive\n\n"
+
+        finally:
+            broadcaster.unsubscribe(branch_id, queue)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )

@@ -9,6 +9,7 @@ from src.schemas.queue import (
     QueueStatusHistoryRead,
     QueueMetrics,
     MetricTimeframe,
+    QueuePositionInfo,
 )
 
 __all__ = [
@@ -27,4 +28,5 @@ __all__ = [
     "QueueStatusHistoryRead",
     "QueueMetrics",
     "MetricTimeframe",
+    "QueuePositionInfo",
 ]

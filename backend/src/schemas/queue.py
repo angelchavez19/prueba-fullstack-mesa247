@@ -53,6 +53,18 @@ class QueueEntryDetailRead(QueueEntryRead):
     status_history: List[QueueStatusHistoryRead] = []
 
 
+class QueuePositionInfo(BaseModel):
+    entry_id: int
+    branch_id: int
+    customer_name: str
+    party_size: int
+    status: QueueStatus
+    order_number: Optional[int] = Field(default=None, description="Número de orden actual en la cola")
+    people_ahead: int = Field(default=0, description="Cantidad de comensales/grupos por delante")
+    called_at: Optional[datetime] = None
+    message: str
+
+
 class MetricTimeframe(str, Enum):
     DAY = "day"
     WEEK = "week"

@@ -1,14 +1,15 @@
 from datetime import datetime, timezone
 from typing import Optional
 from fastapi import HTTPException, status
-from sqlmodel import Session, select
+from sqlmodel import Session, select, func
 from src.models.queue import (
     QueueEntry,
     QueueStatus,
     QueueStatusHistory,
     VALID_TRANSITIONS,
 )
-from src.schemas.queue import QueueEntryCreate
+from src.schemas.queue import QueueEntryCreate, QueuePositionInfo
+from src.services.sse_broadcaster import broadcaster
 
 
 class QueueService:
@@ -47,6 +48,7 @@ class QueueService:
         session.add(history)
         session.commit()
         session.refresh(entry)
+        broadcaster.notify_branch(branch_id)
         return entry
 
     @staticmethod
@@ -124,4 +126,73 @@ class QueueService:
         session.add(history)
         session.commit()
         session.refresh(queue_entry)
+        broadcaster.notify_branch(queue_entry.branch_id)
         return queue_entry
+
+    @staticmethod
+    def get_diner_queue_position(
+        session: Session,
+        branch_id: int,
+        entry_id: int,
+    ) -> QueuePositionInfo:
+        """
+        Calculate the diner's current order number (queue position) and number of parties ahead.
+        """
+        entry = session.get(QueueEntry, entry_id)
+        if not entry or entry.branch_id != branch_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Queue entry with id {entry_id} not found for branch {branch_id}",
+            )
+
+        if entry.status == QueueStatus.RESERVED:
+            # Count other reserved diners who entered before this diner
+            ahead_stmt = select(func.count(QueueEntry.id)).where(
+                QueueEntry.branch_id == branch_id,
+                QueueEntry.status == QueueStatus.RESERVED,
+                (
+                    (QueueEntry.check_in_time < entry.check_in_time)
+                    | (
+                        (QueueEntry.check_in_time == entry.check_in_time)
+                        & (QueueEntry.id < entry.id)
+                    )
+                ),
+            )
+            people_ahead = session.exec(ahead_stmt).one() or 0
+            order_number = people_ahead + 1
+            if people_ahead == 0:
+                message = "¡Eres el siguiente en la cola! Mantente atento al llamado."
+            else:
+                message = f"Tu número de orden es el #{order_number}. Hay {people_ahead} comensales por delante."
+        elif entry.status == QueueStatus.CALLED:
+            order_number = 0
+            people_ahead = 0
+            message = "¡Es tu turno! Por favor acércate a la recepción del restaurante."
+        elif entry.status == QueueStatus.SEATED:
+            order_number = None
+            people_ahead = 0
+            message = "Mesa asignada. ¡Que disfrutes tu visita!"
+        elif entry.status == QueueStatus.CANCELLED:
+            order_number = None
+            people_ahead = 0
+            message = "Tu reserva en la cola fue cancelada."
+        elif entry.status == QueueStatus.NO_SHOW:
+            order_number = None
+            people_ahead = 0
+            message = "Tu turno expiró por inasistencia (no-show)."
+        else:
+            order_number = None
+            people_ahead = 0
+            message = f"Estado actual: {entry.status.value}"
+
+        return QueuePositionInfo(
+            entry_id=entry.id,  # type: ignore
+            branch_id=entry.branch_id,
+            customer_name=entry.customer_name,
+            party_size=entry.party_size,
+            status=entry.status,
+            order_number=order_number,
+            people_ahead=people_ahead,
+            called_at=entry.called_at,
+            message=message,
+        )
