@@ -10,3 +10,6 @@
 
 3. ¿Hay tiempo de espera entre que se le notifica al comensal de que ya tiene q ir al restaurant y llega?
    Suposición: no
+
+4. ¿Es necesario un sistema de autenticación completo?
+   Suposición: no, solo lo básico necesario
