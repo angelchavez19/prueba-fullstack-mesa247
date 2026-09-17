@@ -367,3 +367,35 @@ def test_metrics_with_timeframe_filters(session: Session):
     assert m_all.total_entries == 4
     assert m_all.timeframe == MetricTimeframe.ALL
     assert m_all.from_date is None
+
+
+def test_recall_diner_from_called_to_called(session: Session):
+    """Verify that a diner in 'called' status can be re-called ('called' -> 'called') without error."""
+    branch = Branch(
+        name="Branch ReCall",
+        street="Av. Test",
+        exterior_number="123",
+        neighborhood="Test",
+        city="Lima",
+        state="Lima",
+        country="Peru",
+        postal_code="15000",
+    )
+    session.add(branch)
+    session.commit()
+
+    entry = QueueService.add_diner_to_queue(
+        session,
+        branch.id,
+        QueueEntryCreate(customer_name="Juan Perez", phone_number="+51999999999", party_size=2),
+    )
+
+    # First call: reserved -> called
+    entry = QueueService.transition_status(session, entry, QueueStatus.CALLED)
+    assert entry.status == QueueStatus.CALLED
+    assert entry.was_called is True
+
+    # Re-call: called -> called
+    entry = QueueService.transition_status(session, entry, QueueStatus.CALLED)
+    assert entry.status == QueueStatus.CALLED
+    assert entry.was_called is True

@@ -18,7 +18,7 @@ class QueueStatus(str, Enum):
 
 # Allowed state transitions:
 # From 'reserved' -> 'called', 'seated', 'cancelled', 'no-show'
-# From 'called' -> 'seated', 'cancelled', 'no-show', 'reserved'
+# From 'called' -> 'called' (re-call), 'seated', 'cancelled', 'no-show', 'reserved'
 # Once in seated, cancelled, or no-show, the state is terminal.
 VALID_TRANSITIONS: dict[QueueStatus, set[QueueStatus]] = {
     QueueStatus.RESERVED: {
@@ -28,6 +28,7 @@ VALID_TRANSITIONS: dict[QueueStatus, set[QueueStatus]] = {
         QueueStatus.NO_SHOW,
     },
     QueueStatus.CALLED: {
+        QueueStatus.CALLED,
         QueueStatus.SEATED,
         QueueStatus.CANCELLED,
         QueueStatus.NO_SHOW,
