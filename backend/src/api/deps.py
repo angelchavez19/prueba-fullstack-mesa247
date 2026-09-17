@@ -1,0 +1,44 @@
+from typing import Generator
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+import jwt
+from sqlmodel import Session, select
+from src.database import get_session
+from src.models.user import User
+from src.security import decode_access_token
+
+security = HTTPBearer()
+
+
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    session: Session = Depends(get_session),
+) -> User:
+    """Dependency that decodes PyJWT token and verifies active authenticated user."""
+    token = credentials.credentials
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = decode_access_token(token)
+        user_id_str: str = payload.get("sub")  # type: ignore
+        if user_id_str is None:
+            raise credentials_exception
+        user_id = int(user_id_str)
+    except (jwt.PyJWTError, ValueError):
+        raise credentials_exception
+
+    user = session.get(User, user_id)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Inactive user account",
+        )
+    return user
