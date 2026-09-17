@@ -1,7 +1,7 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional, List
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_serializer
 from src.models.queue import QueueStatus
 
 
@@ -27,6 +27,14 @@ class QueueStatusHistoryRead(BaseModel):
     duration_seconds: Optional[int] = None
     changed_by_user_id: Optional[int] = None
 
+    @field_serializer("changed_at", when_used="json")
+    def serialize_changed_at(self, dt: Optional[datetime]) -> Optional[str]:
+        if dt is None:
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.isoformat()
+
 
 class QueueEntryRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -48,6 +56,23 @@ class QueueEntryRead(BaseModel):
     created_at: datetime
     updated_at: datetime
 
+    @field_serializer(
+        "check_in_time",
+        "called_at",
+        "seated_at",
+        "cancelled_at",
+        "no_show_at",
+        "created_at",
+        "updated_at",
+        when_used="json",
+    )
+    def serialize_datetime(self, dt: Optional[datetime]) -> Optional[str]:
+        if dt is None:
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.isoformat()
+
 
 class QueueEntryDetailRead(QueueEntryRead):
     status_history: List[QueueStatusHistoryRead] = []
@@ -62,7 +87,18 @@ class QueuePositionInfo(BaseModel):
     order_number: Optional[int] = Field(default=None, description="Número de orden actual en la cola")
     people_ahead: int = Field(default=0, description="Cantidad de comensales/grupos por delante")
     called_at: Optional[datetime] = None
+    average_wait_minutes: Optional[float] = Field(default=None, description="Tiempo promedio histórico de espera en minutos")
+    estimated_wait_minutes: Optional[int] = Field(default=None, description="Tiempo estimado de espera en minutos")
     message: str
+
+    @field_serializer("called_at", when_used="json")
+    def serialize_called_at(self, dt: Optional[datetime]) -> Optional[str]:
+        if dt is None:
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.isoformat()
+
 
 
 class MetricTimeframe(str, Enum):
